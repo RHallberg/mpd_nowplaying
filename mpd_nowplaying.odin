@@ -97,9 +97,16 @@ main :: proc() {
     window := Window{"Now playing", 500, 500, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
 
     rl.InitWindow(window.width, window.height, window.name)
+    defer rl.CloseWindow()
+
     rl.SetWindowState(window.control_flags)
     rl.SetTargetFPS(window.fps)
-    texture := rl.LoadTextureFromImage(rl.LoadImageFromMemory(".jpg", raw_data(img), i32(len(img))))
+
+    image := rl.LoadImageFromMemory(".jpg", raw_data(img), i32(len(img)))
+    texture := rl.LoadTextureFromImage(image)
+    defer rl.UnloadTexture(texture)
+    clear(&img)
+    rl.UnloadImage(image)
     source_rec := rl.Rectangle{
         x = 0.0,
         y = 0.0,
@@ -129,6 +136,4 @@ main :: proc() {
 
       rl.EndDrawing()
     }
-
-    rl.CloseWindow()
 }
