@@ -3,6 +3,15 @@ package mpd_nowplaying
 import "core:fmt"
 import "core:os"
 import mpd "mpd"
+import rl   "vendor:raylib"
+
+Window :: struct {
+  name:          cstring,
+  width:         i32,
+  height:        i32,
+  fps:           i32,
+  control_flags: rl.ConfigFlags,
+}
 
 print_song_info :: proc(song: ^mpd.MPD_Song) {
 
@@ -72,11 +81,11 @@ main :: proc() {
     }
 
     song := mpd.mpd_run_get_queue_song_pos (conn, 0)
-    defer mpd.mpd_song_free(song)
     if song == nil {
       fmt.println("Failed to get current song")
       return
     }
+    defer mpd.mpd_song_free(song)
 
     print_song_info(song)
 
@@ -85,10 +94,41 @@ main :: proc() {
       clear(&img)
       img, ok = fetch_album_art(conn, song, .Readpicture)
     }
-    if ok {
-      err := os.write_entire_file_from_bytes("cover.jpg", img[:])
-      if err != nil {
-        fmt.println("Failed to save file")
-      }
+    window := Window{"Now playing", 500, 500, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
+
+    rl.InitWindow(window.width, window.height, window.name)
+    rl.SetWindowState(window.control_flags)
+    rl.SetTargetFPS(window.fps)
+    texture := rl.LoadTextureFromImage(rl.LoadImageFromMemory(".jpg", raw_data(img), i32(len(img))))
+    source_rec := rl.Rectangle{
+        x = 0.0,
+        y = 0.0,
+        width = f32(texture.width),
+        height = f32(texture.height),
     }
+
+    for !rl.WindowShouldClose() {
+
+      if rl.IsWindowResized() {
+        window.width = rl.GetScreenWidth()
+        window.height = rl.GetScreenHeight()
+      }
+      if rl.IsKeyPressed(rl.KeyboardKey.Q) {
+        break
+      }
+
+      dest_rec := rl.Rectangle{
+        x = 0, y =  0,
+        width = f32(window.width),
+        height = f32(window.height),
+      }
+
+      rl.ClearBackground(rl.PINK)
+      rl.DrawTexturePro(texture, source_rec, dest_rec, rl.Vector2{0, 0}, 0, rl.WHITE);
+
+
+      rl.EndDrawing()
+    }
+
+    rl.CloseWindow()
 }
