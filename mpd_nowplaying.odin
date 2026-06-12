@@ -191,6 +191,7 @@ main :: proc() {
   generation := 0
 
   data := Song_Data{title, artist, album, uri, generation, {}}
+  rl.SetWindowTitle(fmt.ctprintf("Now playing: %s - %s", data.artist, data.title))
   thread.create_and_start_with_poly_data3(idle_conn, &mutex, &data, run_idle)
   defer mpd.mpd_connection_free(idle_conn)
   for !rl.WindowShouldClose() {
@@ -209,7 +210,7 @@ main :: proc() {
       artist = data.artist
       album = data.album
       generation = data.generation
-      fmt.println("New song:", data.artist, data.album, data.title)
+      rl.SetWindowTitle(fmt.ctprintf("Now playing: %s - %s", data.artist, data.title))
     }
     sync.mutex_unlock(&mutex)
 
