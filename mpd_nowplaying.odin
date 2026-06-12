@@ -2,9 +2,11 @@ package mpd_nowplaying
 
 import "core:fmt"
 import "core:os"
+import "core:strings"
 import mpd "mpd"
 import rl   "vendor:raylib"
 import sync "core:sync"
+import thread "core:thread"
 
 Window :: struct {
   name:          cstring,
@@ -18,7 +20,7 @@ Song_Data :: struct {
   title: string,
   artist: string,
   album: string,
-  uri: cstring,
+  uri: string,
   generation: int,
   albumart: [dynamic]u8,
 }
@@ -37,6 +39,7 @@ print_song_info :: proc(song: ^mpd.MPD_Song) {
   title  := mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0)
   uri    := mpd.mpd_song_get_uri(song)
 
+  fmt.println(artist, album, title, "uri: ", uri)
   fmt.println(artist, album, title, "uri: ", uri)
 
 }
@@ -82,18 +85,38 @@ run_idle :: proc(conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data
   for {
     event := mpd.run_idle_player_or_queue(conn)
     if event != nil {
-      // Get song data
+      song := mpd.mpd_run_current_song(conn)
+      if song == nil {
+        // Current song is empty when queue is replaced
+        song = mpd.mpd_run_get_queue_song_pos(conn, 0)
+        if song == nil {
+          continue
+        }
+      }
+      defer mpd.mpd_song_free(song)
+      new_uri    := strings.clone_from_cstring(mpd.mpd_song_get_uri(song))
+      sync.mutex_lock(mutex)
+      current_uri := data.uri
+      sync.mutex_unlock(mutex)
+      if(new_uri == "" || current_uri == new_uri) {
+        continue
+      }
+      artist := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
+      album  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0))
+      title  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0))
 
-      // Lock mutex 
+      sync.mutex_lock(mutex)
 
-      // Save enum uri as tmp
-      // Set song data in enum
+      data.title = title
+      data.album = album
+      data.artist = artist
+      data.uri = new_uri
+      data.generation += 1
 
-      // Increment generation
-      // Unlock mutex
+      sync.mutex_unlock(mutex)
 
-      // Compare tmp with current song uri album
-      // If new, run thread for fetching album art
+      // TODO: Compare tmp with current song uri album
+      // TODO: If new, run thread for fetching album art
     }
   }
 }
@@ -104,34 +127,32 @@ main :: proc() {
       conn_params.port,
       conn_params.timeout_ms
   )
-  defer mpd.mpd_connection_free(conn)
 
   if conn == nil {
       return
   }
+  defer mpd.mpd_connection_free(conn)
+
 
   if mpd.mpd_connection_get_error(conn) != .SUCCESS {
       fmt.println("Connection failed")
       return
-  } else {
-      fmt.println("Connection successful!")
   }
-
-  song := mpd.mpd_run_get_queue_song_pos (conn, 0)
+  song := mpd.mpd_run_current_song(conn)
   if song == nil {
     fmt.println("Failed to get current song")
     return
   }
   defer mpd.mpd_song_free(song)
 
-  print_song_info(song)
+  // print_song_info(song)
 
   img, ok := fetch_album_art(conn, song, .Albumart)
   if !ok {
     delete(img)
     img, ok = fetch_album_art(conn, song, .Readpicture)
   }
-  window := Window{"Now playing", 500, 500, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
+  window := Window{"mpd_nowplaying", 500, 500, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
 
   rl.InitWindow(window.width, window.height, window.name)
   defer rl.CloseWindow()
@@ -151,6 +172,27 @@ main :: proc() {
       height = f32(texture.height),
   }
 
+  idle_conn := mpd.mpd_connection_new(
+      conn_params.host,
+      conn_params.port,
+      conn_params.timeout_ms
+  )
+
+  if idle_conn == nil {
+      return
+  }
+
+  mutex: sync.Mutex
+
+  artist := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
+  album  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0))
+  title  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0))
+  uri    := strings.clone_from_cstring(mpd.mpd_song_get_uri(song))
+  generation := 0
+
+  data := Song_Data{title, artist, album, uri, generation, {}}
+  thread.create_and_start_with_poly_data3(idle_conn, &mutex, &data, run_idle)
+  defer mpd.mpd_connection_free(idle_conn)
   for !rl.WindowShouldClose() {
 
     if rl.IsWindowResized() {
@@ -160,6 +202,16 @@ main :: proc() {
     if rl.IsKeyPressed(rl.KeyboardKey.Q) {
       break
     }
+
+    sync.mutex_lock(&mutex)
+    if data.generation != generation {
+      title = data.title
+      artist = data.artist
+      album = data.album
+      generation = data.generation
+      fmt.println("New song:", data.artist, data.album, data.title)
+    }
+    sync.mutex_unlock(&mutex)
 
     dest_rec := rl.Rectangle{
       x = 0, y =  0,

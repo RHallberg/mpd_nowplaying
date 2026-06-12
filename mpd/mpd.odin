@@ -147,6 +147,10 @@ foreign libmpdclient {
       pos: c.uint
     ) -> ^MPD_Song ---
 
+    mpd_run_current_song :: proc (
+      conn: ^MPD_Connection
+    ) -> ^MPD_Song ---
+
     mpd_song_free :: proc (
       song: ^MPD_Song
     ) ---
@@ -168,7 +172,7 @@ foreign libmpdclient {
     ) -> c.int ---
 
     mpd_run_idle_mask :: proc (
-      conn: ^MPD_Connection , 
+      conn: ^MPD_Connection ,
       mask: MPD_Idle
     ) -> MPD_Idle ---
 }
