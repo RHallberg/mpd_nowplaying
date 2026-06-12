@@ -72,10 +72,10 @@ fetch_album_art :: proc(conn: ^mpd.MPD_Connection, song: ^mpd.MPD_Song, method: 
     offset += cast(int)size
   }
 
-  if ok {
-    return img_data, ok
+  if !ok {
+    delete(img_data)
   }
-  return {}, ok
+  return img_data, ok
 }
 
 run_idle :: proc(conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data) {
@@ -128,7 +128,7 @@ main :: proc() {
 
   img, ok := fetch_album_art(conn, song, .Albumart)
   if !ok {
-    clear(&img)
+    delete(img)
     img, ok = fetch_album_art(conn, song, .Readpicture)
   }
   window := Window{"Now playing", 500, 500, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
@@ -142,7 +142,7 @@ main :: proc() {
   image := rl.LoadImageFromMemory(".jpg", raw_data(img), i32(len(img)))
   texture := rl.LoadTextureFromImage(image)
   defer rl.UnloadTexture(texture)
-  clear(&img)
+  delete(img)
   rl.UnloadImage(image)
   source_rec := rl.Rectangle{
       x = 0.0,
@@ -167,10 +167,9 @@ main :: proc() {
       height = f32(window.height),
     }
 
+    rl.BeginDrawing()
     rl.ClearBackground(rl.PINK)
-    rl.DrawTexturePro(texture, source_rec, dest_rec, rl.Vector2{0, 0}, 0, rl.WHITE);
-
-
+    rl.DrawTexturePro(texture, source_rec, dest_rec, rl.Vector2{0, 0}, 0, rl.WHITE)
     rl.EndDrawing()
   }
 }
