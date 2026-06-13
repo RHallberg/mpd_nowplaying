@@ -1,7 +1,6 @@
 package mpd_nowplaying
 
 import "core:fmt"
-import "core:os"
 import "core:strings"
 import mpd "mpd"
 import rl   "vendor:raylib"
@@ -16,12 +15,19 @@ Window :: struct {
   control_flags: rl.ConfigFlags,
 }
 
+Image_Status :: enum {
+    NONE,
+    PENDING,
+    READY
+}
+
 Song_Data :: struct {
   title: string,
   artist: string,
   album: string,
   uri: string,
   generation: int,
+  albumart_status: Image_Status,
   albumart: [dynamic]u8,
 }
 
@@ -30,55 +36,88 @@ Connection :: struct {
   port: u32,
   timeout_ms: u32
 }
+
 conn_params := Connection{"localhost", 6600, 0}
 
-print_song_info :: proc(song: ^mpd.MPD_Song) {
-
-  artist := mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0)
-  album  := mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0)
-  title  := mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0)
-  uri    := mpd.mpd_song_get_uri(song)
-
-  fmt.println(artist, album, title, "uri: ", uri)
-  fmt.println(artist, album, title, "uri: ", uri)
-
-}
-
-Fetch_Art_Method :: enum {
-    Albumart,
-    Readpicture,
-}
-fetch_album_art :: proc(conn: ^mpd.MPD_Connection, song: ^mpd.MPD_Song, method: Fetch_Art_Method) -> (image: [dynamic]u8, ok: bool) {
+fetch_album_art_sync :: proc(mutex: ^sync.Mutex, data: ^Song_Data) {
+  conn := mpd.mpd_connection_new(
+      conn_params.host,
+      conn_params.port,
+      conn_params.timeout_ms
+  )
+  if conn == nil {
+      return
+  }
+  defer mpd.mpd_connection_free(conn)
   chunk_size : int : 8192
   offset : int = 0
   buffer: [chunk_size]u8
   img_data: [dynamic]u8
-  uri    := mpd.mpd_song_get_uri(song)
-  fetch_proc := mpd.mpd_run_albumart
-  if method == .Readpicture {
-    fetch_proc = mpd.mpd_run_readpicture
-  }
+  img_status := Image_Status.PENDING
+
+  sync.mutex_lock(mutex)
+  uri := strings.clone_to_cstring(data.uri)
+  data.albumart_status = img_status
+  current_generation := data.generation
+  sync.mutex_unlock(mutex)
+
   for {
-    size := fetch_proc(conn, uri, cast(u32)offset, &buffer, cast(uint)chunk_size)
+    size := mpd.mpd_run_readpicture(conn, uri, cast(u32)offset, &buffer, cast(uint)chunk_size)
     if size == -1 {
       mpd.mpd_connection_clear_error(conn)
-      ok = false
+      img_status = Image_Status.NONE
       break
     } else if size == 0 && offset == 0 {
-      ok = false
+      img_status = Image_Status.NONE
       break
     } else if size == 0 {
-      ok = true
+      img_status = Image_Status.READY
       break
     }
     append(&img_data, ..buffer[:size])
     offset += cast(int)size
   }
 
-  if !ok {
+  if img_status == Image_Status.NONE {
     delete(img_data)
+    img_data = {}
+    offset = 0
+    for {
+      size := mpd.mpd_run_albumart(conn, uri, cast(u32)offset, &buffer, cast(uint)chunk_size)
+      if size == -1 {
+        mpd.mpd_connection_clear_error(conn)
+        img_status = Image_Status.NONE
+        break
+      } else if size == 0 && offset == 0 {
+        img_status = Image_Status.NONE
+        break
+      } else if size == 0 {
+        img_status = Image_Status.READY
+        break
+      }
+      append(&img_data, ..buffer[:size])
+      offset += cast(int)size
+    }
   }
-  return img_data, ok
+
+  sync.mutex_lock(mutex)
+
+  if(data.generation != current_generation) {
+    sync.mutex_unlock(mutex)
+    delete(img_data)
+    return
+  }
+  switch img_status {
+  case .NONE, .PENDING:
+    delete(img_data)
+  case .READY:
+    delete(data.albumart)
+    data.albumart = img_data
+    img_data = {}
+  }
+  data.albumart_status = img_status
+  sync.mutex_unlock(mutex)
+
 }
 
 run_idle :: proc(conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data) {
@@ -90,20 +129,36 @@ run_idle :: proc(conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data
         // Current song is empty when queue is replaced
         song = mpd.mpd_run_get_queue_song_pos(conn, 0)
         if song == nil {
+
+          sync.mutex_lock(mutex)
+
+          data.title = "None"
+          data.album = "None"
+          data.artist = "None"
+          data.uri = ""
+          data.generation = 0
+          delete(data.albumart)
+          data.albumart = {}
+          data.albumart_status = .NONE
+
+          sync.mutex_unlock(mutex)
+
           continue
         }
       }
-      defer mpd.mpd_song_free(song)
       new_uri    := strings.clone_from_cstring(mpd.mpd_song_get_uri(song))
       sync.mutex_lock(mutex)
       current_uri := data.uri
       sync.mutex_unlock(mutex)
       if(new_uri == "" || current_uri == new_uri) {
+        mpd.mpd_song_free(song)
         continue
       }
       artist := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
       album  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0))
       title  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0))
+
+      mpd.mpd_song_free(song)
 
       sync.mutex_lock(mutex)
 
@@ -112,13 +167,31 @@ run_idle :: proc(conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data
       data.artist = artist
       data.uri = new_uri
       data.generation += 1
+      delete(data.albumart)
+      data.albumart = {}
+      data.albumart_status = .PENDING
 
       sync.mutex_unlock(mutex)
 
-      // TODO: Compare tmp with current song uri album
-      // TODO: If new, run thread for fetching album art
     }
   }
+}
+
+render_album_texture :: proc (texture: ^rl.Texture, window: ^Window) {
+  source_rec := rl.Rectangle{
+      x = 0.0,
+      y = 0.0,
+      width = f32(texture.width),
+      height = f32(texture.height),
+  }
+  dest_rec := rl.Rectangle{
+    x = 0, y =  0,
+    width = f32(window.width),
+    height = f32(window.height),
+  }
+
+  rl.DrawTexturePro(texture^, source_rec, dest_rec, rl.Vector2{0, 0}, 0, rl.WHITE)
+
 }
 
 main :: proc() {
@@ -133,26 +206,11 @@ main :: proc() {
   }
   defer mpd.mpd_connection_free(conn)
 
-
   if mpd.mpd_connection_get_error(conn) != .SUCCESS {
       fmt.println("Connection failed")
       return
   }
-  song := mpd.mpd_run_current_song(conn)
-  if song == nil {
-    fmt.println("Failed to get current song")
-    return
-  }
-  defer mpd.mpd_song_free(song)
-
-  // print_song_info(song)
-
-  img, ok := fetch_album_art(conn, song, .Albumart)
-  if !ok {
-    delete(img)
-    img, ok = fetch_album_art(conn, song, .Readpicture)
-  }
-  window := Window{"mpd_nowplaying", 500, 500, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
+  window := Window{"mpd_nowplaying", 300, 300, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
 
   rl.InitWindow(window.width, window.height, window.name)
   defer rl.CloseWindow()
@@ -160,17 +218,14 @@ main :: proc() {
   rl.SetWindowState(window.control_flags)
   rl.SetTargetFPS(window.fps)
 
-  image := rl.LoadImageFromMemory(".jpg", raw_data(img), i32(len(img)))
-  texture := rl.LoadTextureFromImage(image)
-  defer rl.UnloadTexture(texture)
-  delete(img)
-  rl.UnloadImage(image)
-  source_rec := rl.Rectangle{
-      x = 0.0,
-      y = 0.0,
-      width = f32(texture.width),
-      height = f32(texture.height),
-  }
+  size: i32
+  no_artwork_data := #load("no_artwork.jpg")
+  no_artwork_image := rl.LoadImageFromMemory(".jpg", raw_data(no_artwork_data), i32(len(no_artwork_data)))
+  no_artwork_texture := rl.LoadTextureFromImage(no_artwork_image)
+  texture := rl.LoadTextureFromImage(no_artwork_image)
+  rl.UnloadImage(no_artwork_image)
+  defer rl.UnloadTexture(no_artwork_texture)
+
 
   idle_conn := mpd.mpd_connection_new(
       conn_params.host,
@@ -184,16 +239,28 @@ main :: proc() {
 
   mutex: sync.Mutex
 
-  artist := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
-  album  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0))
-  title  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0))
-  uri    := strings.clone_from_cstring(mpd.mpd_song_get_uri(song))
+  artist := "None"
+  album  := "None"
+  title  := "None"
+  uri    := ""
+  song := mpd.mpd_run_current_song(conn)
+  if song != nil {
+    artist = strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
+    album  = strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0))
+    title  = strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0))
+    uri    = strings.clone_from_cstring(mpd.mpd_song_get_uri(song))
+    mpd.mpd_song_free(song)
+  }
   generation := 0
+  image_should_render := true
 
-  data := Song_Data{title, artist, album, uri, generation, {}}
+  data := Song_Data{title, artist, album, uri, generation, Image_Status.NONE, {}}
   rl.SetWindowTitle(fmt.ctprintf("Now playing: %s - %s", data.artist, data.title))
+
   thread.create_and_start_with_poly_data3(idle_conn, &mutex, &data, run_idle)
+  thread.create_and_start_with_poly_data2(arg1 = &mutex, arg2 = &data, fn = fetch_album_art_sync, self_cleanup = true)
   defer mpd.mpd_connection_free(idle_conn)
+
   for !rl.WindowShouldClose() {
 
     if rl.IsWindowResized() {
@@ -206,23 +273,38 @@ main :: proc() {
 
     sync.mutex_lock(&mutex)
     if data.generation != generation {
+      fmt.println("New song")
       title = data.title
       artist = data.artist
       album = data.album
       generation = data.generation
       rl.SetWindowTitle(fmt.ctprintf("Now playing: %s - %s", data.artist, data.title))
+      image_should_render = true
+      thread.create_and_start_with_poly_data2(arg1 = &mutex, arg2 = &data, fn = fetch_album_art_sync, self_cleanup = true)
     }
     sync.mutex_unlock(&mutex)
 
-    dest_rec := rl.Rectangle{
-      x = 0, y =  0,
-      width = f32(window.width),
-      height = f32(window.height),
-    }
-
     rl.BeginDrawing()
     rl.ClearBackground(rl.PINK)
-    rl.DrawTexturePro(texture, source_rec, dest_rec, rl.Vector2{0, 0}, 0, rl.WHITE)
+    render_album_texture(&no_artwork_texture, &window)
+    sync.mutex_lock(&mutex)
+    albumart_status := data.albumart_status
+    sync.mutex_unlock(&mutex)
+
+    if(image_should_render && albumart_status == Image_Status.READY) {
+      sync.mutex_lock(&mutex)
+      image := rl.LoadImageFromMemory(".jpg", raw_data(data.albumart), i32(len(data.albumart)))
+      sync.mutex_unlock(&mutex)
+
+      rl.UnloadTexture(texture)
+      texture = rl.LoadTextureFromImage(image)
+      rl.UnloadImage(image)
+
+      image_should_render = false
+    }
+    if albumart_status != Image_Status.NONE {
+      render_album_texture(&texture, &window)
+    }
     rl.EndDrawing()
   }
 }
