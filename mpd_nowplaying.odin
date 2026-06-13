@@ -212,6 +212,7 @@ main :: proc() {
   }
   window := Window{"mpd_nowplaying", 300, 300, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
 
+  rl.SetTraceLogLevel(rl.TraceLogLevel.NONE)
   rl.InitWindow(window.width, window.height, window.name)
   defer rl.CloseWindow()
 
@@ -273,7 +274,6 @@ main :: proc() {
 
     sync.mutex_lock(&mutex)
     if data.generation != generation {
-      fmt.println("New song")
       title = data.title
       artist = data.artist
       album = data.album
