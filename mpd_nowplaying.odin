@@ -1,6 +1,7 @@
 package mpd_nowplaying
 
 import "core:fmt"
+import "core:time"
 import "core:strings"
 import mpd "mpd"
 import rl   "vendor:raylib"
@@ -37,7 +38,7 @@ Connection :: struct {
   timeout_ms: u32
 }
 
-conn_params := Connection{"localhost", 6600, 0}
+conn_params := Connection{"localhost", 6600, 15 * 1000}
 
 fetch_album_art_sync :: proc(mutex: ^sync.Mutex, data: ^Song_Data) {
   conn := mpd.mpd_connection_new(
@@ -194,22 +195,36 @@ render_album_texture :: proc (texture: ^rl.Texture, window: ^Window) {
 
 }
 
-main :: proc() {
-  conn := mpd.mpd_connection_new(
-      conn_params.host,
-      conn_params.port,
-      conn_params.timeout_ms
-  )
+refresh_connection :: proc (conn: ^^mpd.MPD_Connection) -> bool {
+    new_conn := mpd.mpd_connection_new(
+        conn_params.host,
+        conn_params.port,
+        conn_params.timeout_ms,
+    )
 
-  if conn == nil {
+    if new_conn == nil {
+        return false
+    }
+    else if mpd.mpd_connection_get_error(new_conn) != .SUCCESS {
+      return false
+    }
+
+    if conn^ != nil {
+        mpd.mpd_connection_free(conn^)
+    }
+
+    conn^ = new_conn
+    return true
+}
+
+main :: proc() {
+  conn: ^mpd.MPD_Connection
+  conn_success := refresh_connection(&conn)
+  if !conn_success {
       return
   }
   defer mpd.mpd_connection_free(conn)
 
-  if mpd.mpd_connection_get_error(conn) != .SUCCESS {
-      fmt.println("Connection failed")
-      return
-  }
   window := Window{"mpd_nowplaying", 300, 300, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
 
   rl.SetTraceLogLevel(rl.TraceLogLevel.NONE)
@@ -233,6 +248,8 @@ main :: proc() {
   album  := "None"
   title  := "None"
   uri    := ""
+
+  conn_refresh_time := time.now()
   song := mpd.mpd_run_current_song(conn)
   if song != nil {
     artist = strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
@@ -243,24 +260,32 @@ main :: proc() {
   }
   generation := 0
   image_should_render := true
+  conn_refresh_interval_ms: f64 = 14000
 
   data := Song_Data{title, artist, album, uri, generation, Image_Status.NONE, {}}
   rl.SetWindowTitle(fmt.ctprintf("%s - %s", data.artist, data.title))
 
-  idle_conn := mpd.mpd_connection_new(
-      conn_params.host,
-      conn_params.port,
-      conn_params.timeout_ms
-  )
-  if idle_conn == nil {
+  idle_conn: ^mpd.MPD_Connection
+  conn_success = refresh_connection(&idle_conn)
+  if !conn_success {
       return
   }
   defer mpd.mpd_connection_free(idle_conn)
+
   thread.create_and_start_with_poly_data3(idle_conn, &mutex, &data, run_idle)
 
   thread.create_and_start_with_poly_data2(arg1 = &mutex, arg2 = &data, fn = fetch_album_art_sync, self_cleanup = true)
 
   for !rl.WindowShouldClose() {
+
+    elapsed := time.duration_milliseconds(time.since(conn_refresh_time))
+    if elapsed > conn_refresh_interval_ms {
+      conn_success = refresh_connection(&conn)
+      if !conn_success {
+        break
+      }
+      conn_refresh_time = time.now()
+    }
 
     if rl.IsWindowResized() {
       window.width = rl.GetScreenWidth()
