@@ -1,7 +1,9 @@
 # MPD nowplaying
-Just a very simple minimalistic mpd widget/player that shows album art
+Just a very simple minimalistic mpd widget/player that shows album art.
 ### Controls:
+
 **Q:** Quit
+
 **P/Space/Left-click:** Toggle play/pause
 
 ## Preview
