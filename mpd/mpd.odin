@@ -63,56 +63,12 @@ MPD_Tag_Type :: enum {
   MPD_TAG_SHOWMOVEMENT,
 
   MPD_TAG_COUNT,
-
   MPD_TAG_UNKNOWN = -1,
 }
 
 MPD_Idle :: enum {
-  /** song database has been updated */
-  MPD_IDLE_DATABASE = 0x1,
-
-  /** a stored playlist has been modified, created, deleted or
-      renamed */
-  MPD_IDLE_STORED_PLAYLIST = 0x2,
-
-  /** the queue has been modified */
   MPD_IDLE_QUEUE = 0x4,
-
-  /** deprecated, don't use */
-  MPD_IDLE_PLAYLIST = MPD_IDLE_QUEUE,
-
-  /** the player state has changed: play, stop, pause, seek, ... */
   MPD_IDLE_PLAYER = 0x8,
-
-  /** the volume has been modified */
-  MPD_IDLE_MIXER = 0x10,
-
-  /** an audio output device has been enabled or disabled */
-  MPD_IDLE_OUTPUT = 0x20,
-
-  /** options have changed: crossfade, random, repeat, ... */
-  MPD_IDLE_OPTIONS = 0x40,
-
-  /** a database update has started or finished. */
-  MPD_IDLE_UPDATE = 0x80,
-
-  /** a sticker has been modified. */
-  MPD_IDLE_STICKER = 0x100,
-
-  /** a client has subscribed to or unsubscribed from a channel */
-  MPD_IDLE_SUBSCRIPTION = 0x200,
-
-  /** a message on a subscribed channel was received */
-  MPD_IDLE_MESSAGE = 0x400,
-
-  /** a partition was added or changed */
-  MPD_IDLE_PARTITION = 0x800,
-
-  /** a neighbor was found or lost */
-  MPD_IDLE_NEIGHBOR = 0x1000,
-
-  /** the mount list has changed */
-  MPD_IDLE_MOUNT = 0x2000,
 }
 
 MPD_Song :: struct {}
@@ -192,11 +148,10 @@ foreign libmpdclient {
       status: ^MPD_Status
     ) -> MPD_State ---
 
-    // mode: true == pause, false == play
     mpd_run_pause :: proc (
       conn: ^MPD_Connection,
-      mode: bool
-    ) -> bool ---
+      mode: c.bool
+    ) -> c.bool ---
 }
 
 run_idle_player_or_queue :: proc(conn: ^MPD_Connection) -> MPD_Idle {
