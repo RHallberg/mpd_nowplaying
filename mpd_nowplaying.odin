@@ -29,7 +29,7 @@ Song_Data :: struct {
   uri: string,
   generation: int,
   albumart_status: Image_Status,
-  albumart: [dynamic]u8,
+  albumart: rl.Image,
 }
 
 Connection :: struct {
@@ -108,14 +108,19 @@ fetch_album_art_sync :: proc(mutex: ^sync.Mutex, data: ^Song_Data) {
     delete(img_data)
     return
   }
+  sync.mutex_unlock(mutex)
   switch img_status {
   case .NONE, .PENDING:
     delete(img_data)
   case .READY:
-    delete(data.albumart)
-    data.albumart = img_data
-    img_data = {}
+    image := rl.LoadImageFromMemory(".jpg", raw_data(img_data), i32(len(img_data)))
+    delete(img_data)
+    sync.mutex_lock(mutex)
+    rl.UnloadImage(data.albumart)
+    data.albumart = image
+    sync.mutex_unlock(mutex)
   }
+  sync.mutex_lock(mutex)
   data.albumart_status = img_status
   sync.mutex_unlock(mutex)
 
@@ -138,8 +143,6 @@ run_idle :: proc(conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data
           data.artist = "None"
           data.uri = ""
           data.generation = 0
-          delete(data.albumart)
-          data.albumart = {}
           data.albumart_status = .NONE
 
           sync.mutex_unlock(mutex)
@@ -168,8 +171,6 @@ run_idle :: proc(conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data
       data.artist = artist
       data.uri = new_uri
       data.generation += 1
-      delete(data.albumart)
-      data.albumart = {}
       data.albumart_status = .PENDING
 
       sync.mutex_unlock(mutex)
@@ -320,13 +321,11 @@ main :: proc() {
     sync.mutex_unlock(&mutex)
 
     if(image_should_render && albumart_status == Image_Status.READY) {
-      sync.mutex_lock(&mutex)
-      image := rl.LoadImageFromMemory(".jpg", raw_data(data.albumart), i32(len(data.albumart)))
-      sync.mutex_unlock(&mutex)
 
       rl.UnloadTexture(texture)
-      texture = rl.LoadTextureFromImage(image)
-      rl.UnloadImage(image)
+      sync.mutex_lock(&mutex)
+      texture = rl.LoadTextureFromImage(data.albumart)
+      sync.mutex_unlock(&mutex)
 
       image_should_render = false
     }
