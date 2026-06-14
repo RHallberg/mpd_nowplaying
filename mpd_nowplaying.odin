@@ -227,17 +227,6 @@ main :: proc() {
   rl.UnloadImage(no_artwork_image)
   defer rl.UnloadTexture(no_artwork_texture)
 
-
-  idle_conn := mpd.mpd_connection_new(
-      conn_params.host,
-      conn_params.port,
-      conn_params.timeout_ms
-  )
-
-  if idle_conn == nil {
-      return
-  }
-
   mutex: sync.Mutex
 
   artist := "None"
@@ -256,11 +245,20 @@ main :: proc() {
   image_should_render := true
 
   data := Song_Data{title, artist, album, uri, generation, Image_Status.NONE, {}}
-  rl.SetWindowTitle(fmt.ctprintf("Now playing: %s - %s", data.artist, data.title))
+  rl.SetWindowTitle(fmt.ctprintf("%s - %s", data.artist, data.title))
 
-  thread.create_and_start_with_poly_data3(idle_conn, &mutex, &data, run_idle)
-  thread.create_and_start_with_poly_data2(arg1 = &mutex, arg2 = &data, fn = fetch_album_art_sync, self_cleanup = true)
+  idle_conn := mpd.mpd_connection_new(
+      conn_params.host,
+      conn_params.port,
+      conn_params.timeout_ms
+  )
+  if idle_conn == nil {
+      return
+  }
   defer mpd.mpd_connection_free(idle_conn)
+  thread.create_and_start_with_poly_data3(idle_conn, &mutex, &data, run_idle)
+
+  thread.create_and_start_with_poly_data2(arg1 = &mutex, arg2 = &data, fn = fetch_album_art_sync, self_cleanup = true)
 
   for !rl.WindowShouldClose() {
 
@@ -271,6 +269,11 @@ main :: proc() {
     if rl.IsKeyPressed(rl.KeyboardKey.Q) {
       break
     }
+    else if rl.IsKeyPressed(rl.KeyboardKey.P) ||
+            rl.IsKeyPressed(rl.KeyboardKey.SPACE) ||
+            rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+        mpd.toggle_play_pause(conn)
+    }
 
     sync.mutex_lock(&mutex)
     if data.generation != generation {
@@ -278,7 +281,7 @@ main :: proc() {
       artist = data.artist
       album = data.album
       generation = data.generation
-      rl.SetWindowTitle(fmt.ctprintf("Now playing: %s - %s", data.artist, data.title))
+      rl.SetWindowTitle(fmt.ctprintf("%s - %s", data.artist, data.title))
       image_should_render = true
       thread.create_and_start_with_poly_data2(arg1 = &mutex, arg2 = &data, fn = fetch_album_art_sync, self_cleanup = true)
     }

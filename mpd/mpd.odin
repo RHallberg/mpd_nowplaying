@@ -5,10 +5,18 @@ import "core:c"
 foreign import libmpdclient "system:mpdclient"
 
 MPD_Connection :: struct {}
+MPD_Status :: struct {}
 
 MPD_Error :: enum int {
     SUCCESS = 0,
 }
+
+MPD_State :: enum {
+  MPD_STATE_UNKNOWN,
+  MPD_STATE_STOP,
+  MPD_STATE_PLAY,
+  MPD_STATE_PAUSE,
+};
 
 MPD_Tag_Type :: enum {
 
@@ -172,11 +180,38 @@ foreign libmpdclient {
     ) -> c.int ---
 
     mpd_run_idle_mask :: proc (
-      conn: ^MPD_Connection ,
+      conn: ^MPD_Connection,
       mask: MPD_Idle
     ) -> MPD_Idle ---
+
+    mpd_run_status :: proc (
+      conn: ^MPD_Connection
+    ) -> ^MPD_Status ---
+
+    mpd_status_get_state :: proc (
+      status: ^MPD_Status
+    ) -> MPD_State ---
+
+    // mode: true == pause, false == play
+    mpd_run_pause :: proc (
+      conn: ^MPD_Connection,
+      mode: bool
+    ) -> bool ---
 }
 
 run_idle_player_or_queue :: proc(conn: ^MPD_Connection) -> MPD_Idle {
     return mpd_run_idle_mask(conn, MPD_Idle.MPD_IDLE_QUEUE | MPD_Idle.MPD_IDLE_PLAYER)
+}
+
+toggle_play_pause :: proc(conn: ^MPD_Connection) {
+  status := mpd_run_status(conn)
+  state  := mpd_status_get_state(status)
+  switch state {
+  case .MPD_STATE_UNKNOWN, .MPD_STATE_STOP:
+    return
+  case .MPD_STATE_PAUSE:
+    mpd_run_pause(conn, false)
+  case .MPD_STATE_PLAY:
+    mpd_run_pause(conn, true)
+  }
 }
