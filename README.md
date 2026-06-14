@@ -7,7 +7,7 @@ Just a very simple minimalistic mpd widget/player that shows album art
 ## Preview
 ![preview of the the widget](screenshots/preview.png "preview")
 
-## How to build
+## Building
 
 Dependencies:
  - mpd
@@ -16,6 +16,12 @@ Dependencies:
 
 ```bash
 $ odin build . -build-mode:exe
+```
+
+### Installation
+
+```bash
+$ sudo make clean install
 ```
 
 
