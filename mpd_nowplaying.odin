@@ -58,6 +58,7 @@ fetch_album_art_sync :: proc(mutex: ^sync.Mutex, data: ^Song_Data) {
 
   sync.mutex_lock(mutex)
   uri := strings.clone_to_cstring(data.uri)
+  defer delete(uri)
   data.albumart_status = img_status
   current_generation := data.generation
   sync.mutex_unlock(mutex)
@@ -101,81 +102,79 @@ fetch_album_art_sync :: proc(mutex: ^sync.Mutex, data: ^Song_Data) {
     }
   }
 
-  sync.mutex_lock(mutex)
+  image: rl.Image
+  if img_status == .READY {
+    image = rl.LoadImageFromMemory(".jpg", raw_data(img_data), i32(len(img_data)))
+  }
+  delete(img_data)
 
-  if(data.generation != current_generation) {
-    sync.mutex_unlock(mutex)
-    delete(img_data)
+  sync.mutex_lock(mutex)
+  defer sync.mutex_unlock(mutex)
+
+  if data.generation != current_generation {
+    rl.UnloadImage(image)
     return
   }
-  sync.mutex_unlock(mutex)
-  switch img_status {
-  case .NONE, .PENDING:
-    delete(img_data)
-  case .READY:
-    image := rl.LoadImageFromMemory(".jpg", raw_data(img_data), i32(len(img_data)))
-    delete(img_data)
-    sync.mutex_lock(mutex)
-    rl.UnloadImage(data.albumart)
-    data.albumart = image
-    sync.mutex_unlock(mutex)
-  }
-  sync.mutex_lock(mutex)
+  rl.UnloadImage(data.albumart)
+  data.albumart = image
   data.albumart_status = img_status
-  sync.mutex_unlock(mutex)
 
 }
 
-run_idle :: proc(conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data) {
+run_idle :: proc(initial_conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data) {
+  conn := initial_conn
   for {
     event := mpd.run_idle_player_or_queue(conn)
-    if event != nil {
-      song := mpd.mpd_run_current_song(conn)
+    if event == nil {
+      for !refresh_connection(&conn) {}
+      continue
+    }
+    song := mpd.mpd_run_current_song(conn)
+    if song == nil {
+      // Current song is empty when queue is replaced
+      song = mpd.mpd_run_get_queue_song_pos(conn, 0)
       if song == nil {
-        // Current song is empty when queue is replaced
-        song = mpd.mpd_run_get_queue_song_pos(conn, 0)
-        if song == nil {
-
-          sync.mutex_lock(mutex)
-
-          data.title = "None"
-          data.album = "None"
-          data.artist = "None"
-          data.uri = ""
-          data.generation = 0
-          data.albumart_status = .NONE
-
-          sync.mutex_unlock(mutex)
-
-          continue
-        }
-      }
-      new_uri    := strings.clone_from_cstring(mpd.mpd_song_get_uri(song))
-      sync.mutex_lock(mutex)
-      current_uri := data.uri
-      sync.mutex_unlock(mutex)
-      if(new_uri == "" || current_uri == new_uri) {
-        mpd.mpd_song_free(song)
+        sync.mutex_lock(mutex)
+        delete(data.title)
+        delete(data.album)
+        delete(data.artist)
+        delete(data.uri)
+        data.title = strings.clone("None")
+        data.album = strings.clone("None")
+        data.artist = strings.clone("None")
+        data.uri = strings.clone("")
+        data.generation += 1
+        data.albumart_status = .NONE
+        sync.mutex_unlock(mutex)
         continue
       }
-      artist := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
-      album  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0))
-      title  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0))
-
-      mpd.mpd_song_free(song)
-
-      sync.mutex_lock(mutex)
-
-      data.title = title
-      data.album = album
-      data.artist = artist
-      data.uri = new_uri
-      data.generation += 1
-      data.albumart_status = .PENDING
-
-      sync.mutex_unlock(mutex)
-
     }
+    new_uri := strings.clone_from_cstring(mpd.mpd_song_get_uri(song))
+    sync.mutex_lock(mutex)
+    current_uri := data.uri
+    sync.mutex_unlock(mutex)
+    if new_uri == "" || current_uri == new_uri {
+      delete(new_uri)
+      mpd.mpd_song_free(song)
+      continue
+    }
+    artist := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
+    album  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0))
+    title  := strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0))
+    mpd.mpd_song_free(song)
+
+    sync.mutex_lock(mutex)
+    delete(data.title)
+    delete(data.album)
+    delete(data.artist)
+    delete(data.uri)
+    data.title = title
+    data.album = album
+    data.artist = artist
+    data.uri = new_uri
+    data.generation += 1
+    data.albumart_status = .PENDING
+    sync.mutex_unlock(mutex)
   }
 }
 
@@ -207,6 +206,7 @@ refresh_connection :: proc (conn: ^^mpd.MPD_Connection) -> bool {
         return false
     }
     else if mpd.mpd_connection_get_error(new_conn) != .SUCCESS {
+      mpd.mpd_connection_free(new_conn)
       return false
     }
 
@@ -245,14 +245,18 @@ main :: proc() {
 
   mutex: sync.Mutex
 
-  artist := "None"
-  album  := "None"
-  title  := "None"
-  uri    := ""
+  artist := strings.clone("None")
+  album  := strings.clone("None")
+  title  := strings.clone("None")
+  uri    := strings.clone("")
 
   conn_refresh_time := time.now()
   song := mpd.mpd_run_current_song(conn)
   if song != nil {
+    delete(artist)
+    delete(album)
+    delete(title)
+    delete(uri)
     artist = strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ARTIST, 0))
     album  = strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_ALBUM, 0))
     title  = strings.clone_from_cstring(mpd.mpd_song_get_tag(song, mpd.MPD_Tag_Type.MPD_TAG_TITLE, 0))
@@ -271,7 +275,6 @@ main :: proc() {
   if !conn_success {
       return
   }
-  defer mpd.mpd_connection_free(idle_conn)
 
   thread.create_and_start_with_poly_data3(idle_conn, &mutex, &data, run_idle)
 

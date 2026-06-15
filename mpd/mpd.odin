@@ -152,6 +152,10 @@ foreign libmpdclient {
       conn: ^MPD_Connection,
       mode: c.bool
     ) -> c.bool ---
+
+    mpd_status_free :: proc (
+      status: ^MPD_Status
+    ) ---
 }
 
 run_idle_player_or_queue :: proc(conn: ^MPD_Connection) -> MPD_Idle {
@@ -160,6 +164,7 @@ run_idle_player_or_queue :: proc(conn: ^MPD_Connection) -> MPD_Idle {
 
 toggle_play_pause :: proc(conn: ^MPD_Connection) {
   status := mpd_run_status(conn)
+  defer mpd_status_free(status)
   state  := mpd_status_get_state(status)
   switch state {
   case .MPD_STATE_UNKNOWN, .MPD_STATE_STOP:
