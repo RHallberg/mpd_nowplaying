@@ -170,11 +170,14 @@ run_idle_player_or_queue :: proc(conn: ^MPD_Connection) -> MPD_Idle {
     return mpd_run_idle_mask(conn, MPD_Idle.MPD_IDLE_QUEUE | MPD_Idle.MPD_IDLE_PLAYER)
 }
 
-toggle_play_pause :: proc(conn: ^MPD_Connection) {
+get_state :: proc(conn: ^MPD_Connection) -> MPD_State {
   status := mpd_run_status(conn)
   defer mpd_status_free(status)
-  state  := mpd_status_get_state(status)
-  switch state {
+  return mpd_status_get_state(status)
+}
+
+toggle_play_pause :: proc(conn: ^MPD_Connection) {
+  switch get_state(conn) {
   case .MPD_STATE_UNKNOWN, .MPD_STATE_STOP:
     return
   case .MPD_STATE_PAUSE:

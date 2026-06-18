@@ -30,6 +30,7 @@ Song_Data :: struct {
   generation: int,
   albumart_status: Image_Status,
   albumart: rl.Image,
+  player_state: mpd.MPD_State
 }
 
 Connection :: struct {
@@ -141,6 +142,7 @@ run_idle :: proc(initial_conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^S
       for !refresh_connection(&conn) {}
       continue
     }
+    state := mpd.get_state(conn)
     song := mpd.mpd_run_current_song(conn)
     if song == nil {
       // Current song is empty when queue is replaced
@@ -157,6 +159,7 @@ run_idle :: proc(initial_conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^S
         data.uri = strings.clone("")
         data.generation += 1
         data.albumart_status = .NONE
+        data.player_state = state
         sync.mutex_unlock(mutex)
         continue
       }
@@ -186,6 +189,7 @@ run_idle :: proc(initial_conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^S
     data.uri = new_uri
     data.generation += 1
     data.albumart_status = .PENDING
+    data.player_state = state
     sync.mutex_unlock(mutex)
   }
 }
@@ -255,6 +259,17 @@ main :: proc() {
     return Click_Type.NONE
   }
 
+  player_active :: proc(mutex: ^sync.Mutex, data: ^Song_Data) -> bool {
+    sync.mutex_lock(mutex)
+    current_state := data.player_state
+    sync.mutex_unlock(mutex)
+    if current_state == mpd.MPD_State.MPD_STATE_PAUSE ||
+       current_state == mpd.MPD_State.MPD_STATE_PLAY {
+      return true
+    }
+    return false
+  }
+
   rl.SetTraceLogLevel(rl.TraceLogLevel.NONE)
   rl.InitWindow(window.width, window.height, window.name)
   defer rl.CloseWindow()
@@ -277,6 +292,7 @@ main :: proc() {
   uri    := strings.clone("")
 
   conn_refresh_time := time.now()
+  state := mpd.get_state(conn)
   song := mpd.mpd_run_current_song(conn)
   if song != nil {
     delete(artist)
@@ -293,7 +309,7 @@ main :: proc() {
   image_should_render := true
   conn_refresh_interval_ms: f64 = 14000
 
-  data := Song_Data{title, artist, album, uri, generation, Image_Status.NONE, {}}
+  data := Song_Data{title, artist, album, uri, generation, Image_Status.NONE, {}, state}
   rl.SetWindowTitle(fmt.ctprintf("%s - %s", data.artist, data.title))
 
   idle_conn: ^mpd.MPD_Connection
@@ -326,17 +342,17 @@ main :: proc() {
     if rl.IsKeyPressed(rl.KeyboardKey.Q) {
       break
     }
-    else if rl.IsKeyPressed(rl.KeyboardKey.P) ||
+    else if player_active(&mutex, &data) && (rl.IsKeyPressed(rl.KeyboardKey.P) ||
             rl.IsKeyPressed(rl.KeyboardKey.SPACE) ||
-            left_click == Click_Type.SINGLE {
+            left_click == Click_Type.SINGLE) {
         mpd.toggle_play_pause(conn)
     }
-    else if rl.IsKeyPressed(rl.KeyboardKey.N) ||
-            left_click == Click_Type.DOUBLE {
+    else if player_active(&mutex, &data) && (rl.IsKeyPressed(rl.KeyboardKey.N) ||
+            left_click == Click_Type.DOUBLE) {
         mpd.mpd_run_next(conn)
     }
-    else if rl.IsKeyPressed(rl.KeyboardKey.B) ||
-            rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
+    else if player_active(&mutex, &data) && (rl.IsKeyPressed(rl.KeyboardKey.B) ||
+            rl.IsMouseButtonPressed(rl.MouseButton.RIGHT)) {
         mpd.mpd_run_previous(conn)
     }
 
@@ -349,6 +365,7 @@ main :: proc() {
       rl.SetWindowTitle(fmt.ctprintf("%s - %s", data.artist, data.title))
       image_should_render = true
       thread.create_and_start_with_poly_data2(arg1 = &mutex, arg2 = &data, fn = fetch_album_art_sync, self_cleanup = true)
+      data.player_state = mpd.get_state(conn)
     }
     sync.mutex_unlock(&mutex)
 
