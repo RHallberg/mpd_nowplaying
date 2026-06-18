@@ -40,6 +40,18 @@ Connection :: struct {
 
 conn_params := Connection{"localhost", 6600, 15 * 1000}
 
+Click_State :: struct {
+  first_click: bool,
+  click_time: time.Time,
+  doubleclick_timeout_ms: f64
+}
+
+Click_Type :: enum {
+  NONE,
+  SINGLE,
+  DOUBLE
+}
+
 fetch_album_art_sync :: proc(mutex: ^sync.Mutex, data: ^Song_Data) {
   conn := mpd.mpd_connection_new(
       conn_params.host,
@@ -227,6 +239,21 @@ main :: proc() {
   defer mpd.mpd_connection_free(conn)
 
   window := Window{"mpd_nowplaying", 300, 300, 144, rl.ConfigFlags{.WINDOW_RESIZABLE}}
+  click_state := Click_State{false, time.now(), 200}
+
+  handle_click :: proc(click_state: ^Click_State) -> Click_Type {
+    if !click_state.first_click && rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+      click_state.first_click = true
+      click_state.click_time = time.now()
+    } else if click_state.first_click && time.duration_milliseconds(time.since(click_state.click_time)) > click_state.doubleclick_timeout_ms {
+      click_state.first_click = false
+      return Click_Type.SINGLE
+    } else if click_state.first_click && rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+      click_state.first_click = false
+      return Click_Type.DOUBLE
+    }
+    return Click_Type.NONE
+  }
 
   rl.SetTraceLogLevel(rl.TraceLogLevel.NONE)
   rl.InitWindow(window.width, window.height, window.name)
@@ -235,7 +262,6 @@ main :: proc() {
   rl.SetWindowState(window.control_flags)
   rl.SetTargetFPS(window.fps)
 
-  size: i32
   no_artwork_data := #load("no_artwork.jpg")
   no_artwork_image := rl.LoadImageFromMemory(".jpg", raw_data(no_artwork_data), i32(len(no_artwork_data)))
   no_artwork_texture := rl.LoadTextureFromImage(no_artwork_image)
@@ -295,13 +321,23 @@ main :: proc() {
       window.width = rl.GetScreenWidth()
       window.height = rl.GetScreenHeight()
     }
+
+    left_click := handle_click(&click_state)
     if rl.IsKeyPressed(rl.KeyboardKey.Q) {
       break
     }
     else if rl.IsKeyPressed(rl.KeyboardKey.P) ||
             rl.IsKeyPressed(rl.KeyboardKey.SPACE) ||
-            rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+            left_click == Click_Type.SINGLE {
         mpd.toggle_play_pause(conn)
+    }
+    else if rl.IsKeyPressed(rl.KeyboardKey.N) ||
+            left_click == Click_Type.DOUBLE {
+        mpd.mpd_run_next(conn)
+    }
+    else if rl.IsKeyPressed(rl.KeyboardKey.B) ||
+            rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
+        mpd.mpd_run_previous(conn)
     }
 
     sync.mutex_lock(&mutex)

@@ -153,6 +153,14 @@ foreign libmpdclient {
       mode: c.bool
     ) -> c.bool ---
 
+    mpd_run_next :: proc (
+      conn: ^MPD_Connection
+    ) -> c.bool ---
+
+    mpd_run_previous :: proc (
+      conn: ^MPD_Connection
+    ) -> c.bool ---
+
     mpd_status_free :: proc (
       status: ^MPD_Status
     ) ---
