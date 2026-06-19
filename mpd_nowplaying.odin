@@ -137,32 +137,29 @@ fetch_album_art_sync :: proc(mutex: ^sync.Mutex, data: ^Song_Data) {
 run_idle :: proc(initial_conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^Song_Data) {
   conn := initial_conn
   for {
-    event := mpd.run_idle_player_or_queue(conn)
+    event := mpd.run_idle_player(conn)
     if event == nil {
       for !refresh_connection(&conn) {}
       continue
     }
-    state := mpd.get_state(conn)
+    sync.mutex_lock(mutex)
+      data.player_state = mpd.get_state(conn)
+    sync.mutex_unlock(mutex)
     song := mpd.mpd_run_current_song(conn)
     if song == nil {
-      // Current song is empty when queue is replaced
-      song = mpd.mpd_run_get_queue_song_pos(conn, 0)
-      if song == nil {
-        sync.mutex_lock(mutex)
-        delete(data.title)
-        delete(data.album)
-        delete(data.artist)
-        delete(data.uri)
-        data.title = strings.clone("None")
-        data.album = strings.clone("None")
-        data.artist = strings.clone("None")
-        data.uri = strings.clone("")
-        data.generation += 1
-        data.albumart_status = .NONE
-        data.player_state = state
-        sync.mutex_unlock(mutex)
-        continue
-      }
+      sync.mutex_lock(mutex)
+      delete(data.title)
+      delete(data.album)
+      delete(data.artist)
+      delete(data.uri)
+      data.title = strings.clone("None")
+      data.album = strings.clone("None")
+      data.artist = strings.clone("None")
+      data.uri = strings.clone("")
+      data.generation += 1
+      data.albumart_status = .NONE
+      sync.mutex_unlock(mutex)
+      continue
     }
     new_uri := strings.clone_from_cstring(mpd.mpd_song_get_uri(song))
     sync.mutex_lock(mutex)
@@ -189,7 +186,6 @@ run_idle :: proc(initial_conn: ^mpd.MPD_Connection, mutex: ^sync.Mutex, data: ^S
     data.uri = new_uri
     data.generation += 1
     data.albumart_status = .PENDING
-    data.player_state = state
     sync.mutex_unlock(mutex)
   }
 }
@@ -365,7 +361,6 @@ main :: proc() {
       rl.SetWindowTitle(fmt.ctprintf("%s - %s", data.artist, data.title))
       image_should_render = true
       thread.create_and_start_with_poly_data2(arg1 = &mutex, arg2 = &data, fn = fetch_album_art_sync, self_cleanup = true)
-      data.player_state = mpd.get_state(conn)
     }
     sync.mutex_unlock(&mutex)
 

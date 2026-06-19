@@ -67,7 +67,6 @@ MPD_Tag_Type :: enum {
 }
 
 MPD_Idle :: enum {
-  MPD_IDLE_QUEUE = 0x4,
   MPD_IDLE_PLAYER = 0x8,
 }
 
@@ -166,8 +165,8 @@ foreign libmpdclient {
     ) ---
 }
 
-run_idle_player_or_queue :: proc(conn: ^MPD_Connection) -> MPD_Idle {
-    return mpd_run_idle_mask(conn, MPD_Idle.MPD_IDLE_QUEUE | MPD_Idle.MPD_IDLE_PLAYER)
+run_idle_player :: proc(conn: ^MPD_Connection) -> MPD_Idle {
+    return mpd_run_idle_mask(conn,  MPD_Idle.MPD_IDLE_PLAYER)
 }
 
 get_state :: proc(conn: ^MPD_Connection) -> MPD_State {
